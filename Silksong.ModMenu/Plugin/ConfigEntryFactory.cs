@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -25,6 +25,22 @@ public class ConfigEntryFactory
         ConfigEntryBase entry,
         [MaybeNullWhen(false)] out MenuElement menuElement
     );
+
+    // Ability to order groups and config option.
+    private readonly Dictionary<MenuElement, (int Section, int Order)> elementOrders = [];
+
+    // Options not ordered appear alphabetical.
+    private (int Section, int Order) OrderOf(MenuElement element) =>
+        elementOrders.TryGetValue(element, out var order) ? order : (int.MaxValue, int.MaxValue);
+
+    private int CompareElements(
+        (string path, MenuElement element) a,
+        (string path, MenuElement element) b
+    )
+    {
+        int byOrder = OrderOf(a.element).CompareTo(OrderOf(b.element));
+        return byOrder != 0 ? byOrder : a.path.CompareTo(b.path);
+    }
 
     private static readonly List<MenuElementGenerator> defaultGenerators =
     [
@@ -109,7 +125,7 @@ public class ConfigEntryFactory
         {
             List<(string, MenuElement)> list = [];
             tree.ForEachPostfix((keys, t) => list.AddRange(t.Value.Elements));
-            list.Sort((a, b) => a.Item1.CompareTo(b.Item1));
+            list.Sort(CompareElements);
             return list;
         }
 
@@ -141,10 +157,8 @@ public class ConfigEntryFactory
             subpageNames.RemoveRange(origSize, subpageNames.Count - origSize);
         }
 
-        return ArrangeScreen(
-            [.. elements.OrderBy(e => e.path)],
-            subpageNames.LastOrDefault() ?? menuName
-        );
+        elements.Sort(CompareElements);
+        return ArrangeScreen(elements, subpageNames.LastOrDefault() ?? menuName);
     }
 
     /// <summary>
@@ -187,12 +201,18 @@ public class ConfigEntryFactory
     )
     {
         TreeNode<LocalizedText, ElementTreeNode> elementsTree = new();
+        var sectionRanks = ConfigEntryOrder.SectionRanks(config);
         foreach (var entry in config.OrderBy(e => e.Key.Key))
         {
             if (GenerateMenuElement(entry.Value, out var element))
             {
                 var subgroupNames = GetSubgroupNames(entry.Value, element);
                 elementsTree[subgroupNames].Value.Elements.Add((entry.Key.Key, element));
+                if (sectionRanks != null)
+                    elementOrders[element] = (
+                        sectionRanks[entry.Key.Section],
+                        ConfigEntryOrder.Of(entry.Value)?.Order ?? int.MaxValue
+                    );
             }
         }
 
